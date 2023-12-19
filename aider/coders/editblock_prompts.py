@@ -186,3 +186,5 @@ If you want to put code in a new file, use a *SEARCH/REPLACE block* with:
 Do not propose changes to these files, they are *read-only*.
 To make a file *read-write*, ask the user to *add it to the chat*.
 """
+
+    extra_context_prefix = "Here is some context for our conversation.\n"

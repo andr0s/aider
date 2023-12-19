@@ -105,3 +105,5 @@ To make a new file, show a diff from `--- /dev/null` to `+++ path/to/new/file.ex
 Do not propose changes to these files, they are *read-only*.
 To make a file *read-write*, ask the user to *add it to the chat*.
 """
+
+    extra_context_prefix = "Here is some context for our conversation.\n"

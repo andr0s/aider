@@ -7,6 +7,7 @@ import sys
 import threading
 import time
 import traceback
+import functools
 from json.decoder import JSONDecodeError
 from pathlib import Path
 
@@ -42,6 +43,7 @@ def wrap_fence(name):
 class Coder:
     client = None
     abs_fnames = None
+    extra_context = None  # Dictionary {title: content}
     repo = None
     last_aider_commit_hash = None
     last_asked_for_commit_time = 0
@@ -126,6 +128,7 @@ class Coder:
 
         self.verbose = verbose
         self.abs_fnames = set()
+        self.extra_context = {}
         self.cur_messages = []
         self.done_messages = []
 
@@ -274,6 +277,9 @@ class Coder:
         for _fname, content in self.get_abs_fnames_content():
             all_content += content + "\n"
 
+        for content in self.extra_context.values():
+            all_content += content + "\n"
+
         good = False
         for fence_open, fence_close in self.fences:
             if fence_open in all_content or fence_close in all_content:
@@ -312,6 +318,20 @@ class Coder:
             prompt += f"{self.fence[1]}\n"
 
         return prompt
+    
+    def get_extra_context_content(self):
+        if not self.extra_context:
+            return ""
+
+        prompt = []
+        for title, item_content in self.extra_context.items():
+            fenced_content = item_content.replace("AIDER_FENCE_0", self.fence[0]).replace("AIDER_FENCE_1", self.fence[1])
+            item_prompt = "Context item: " + title + "\n"
+            item_prompt += fenced_content
+            item_prompt += "End of context item: " + title + "\n"
+            prompt.append(item_prompt)
+
+        return "\n\n".join(prompt)
 
     def get_repo_map(self):
         if not self.repo_map:
@@ -320,6 +340,22 @@ class Coder:
         other_files = set(self.get_all_abs_files()) - set(self.abs_fnames)
         repo_content = self.repo_map.get_repo_map(self.abs_fnames, other_files)
         return repo_content
+    
+    def get_extra_context_messages(self):
+        content = self.get_extra_context_content()
+        if not content:
+            return []
+
+        all_content = ""
+        all_content += self.gpt_prompts.extra_context_prefix
+        all_content += content
+
+        messages = [
+            dict(role="user", content=all_content),
+            dict(role="assistant", content="Ok."),
+        ]
+
+        return messages  
 
     def get_files_messages(self):
         all_content = ""
@@ -422,7 +458,7 @@ class Coder:
     def run_loop(self):
         inp = self.io.get_input(
             self.root,
-            self.get_inchat_relative_files(),
+            self.get_inchat_relative_files() + list(self.extra_context.keys()),
             self.get_addable_relative_files(),
             self.commands,
         )
@@ -450,6 +486,7 @@ class Coder:
             dict(role="system", content=main_sys),
         ]
 
+        messages += self.get_extra_context_messages()
         self.summarize_end()
         messages += self.done_messages
         messages += self.get_files_messages()

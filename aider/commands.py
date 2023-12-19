@@ -1,12 +1,16 @@
 import re
 import subprocess
 import sys
+import os 
+import shutil
+from tempfile import TemporaryFile
 from pathlib import Path
 
 import git
 from prompt_toolkit.completion import Completion
 
 from aider import prompts, voice
+from aider.utils_web import scrape
 
 from .dump import dump  # noqa: F401
 
@@ -142,6 +146,13 @@ class Commands:
             content = f"{relative_fname}\n```\n" + content + "```\n"
             tokens = self.coder.main_model.token_count(content)
             res.append((tokens, f"{relative_fname}", "use /drop to drop from chat"))
+
+        # additional context
+        for key, item in self.coder.extra_context.items():
+            # approximate
+            content = f"Context item: {key}\n" + item + "END of context item: {key}\n"
+            tokens = self.coder.main_model.token_count(content)
+            res.append((tokens, f"{key}", "use /drop to drop from chat"))
 
         self.io.tool_output("Approximate context window usage, in tokens:")
         self.io.tool_output()
@@ -343,6 +354,10 @@ class Commands:
         for fname in files:
             if partial.lower() in fname.lower():
                 yield Completion(fname, start_position=-len(partial))
+        
+        for key in self.coder.extra_context.keys():
+            if partial.lower() in key.lower():
+                yield Completion(key, start_position=-len(partial))
 
     def cmd_drop(self, args):
         "Remove files from the chat session to free up context space"
@@ -353,6 +368,11 @@ class Commands:
 
         filenames = parse_quoted_filenames(args)
         for word in filenames:
+            if word in self.coder.extra_context.keys():
+                del self.coder.extra_context[word]
+                self.io.tool_output(f'Removed context item "{word}" from the chat')
+                continue
+
             matched_files = self.glob_filtered_to_repo(word)
 
             if not matched_files:
@@ -363,6 +383,62 @@ class Commands:
                 if abs_fname in self.coder.abs_fnames:
                     self.coder.abs_fnames.remove(abs_fname)
                     self.io.tool_output(f"Removed {matched_file} from the chat")
+
+    def completions_show(self, partial):
+        return self.completions_drop(partial)
+
+    def cmd_show(self, args):
+        "Show the content of files or context items added to the chat"
+        if not args.strip():
+            self.io.tool_error("No file or context item specified.")
+            return
+
+        filenames = parse_quoted_filenames(args)
+        for word in filenames:
+            if word in self.coder.extra_context.keys():
+                self.io.tool_output(self.coder.extra_context[word])
+                continue
+
+            abs_fname = self.coder.abs_root_path(word)
+            if (abs_fname in self.coder.abs_fnames):
+                self.io.tool_output(self.io.read_text(abs_fname))
+                continue
+
+            self.io.tool_error(f"{word} is not in the chat")
+
+    def cmd_hist(self, args):
+        "List all chat history"
+        columns = shutil.get_terminal_size(fallback=(120, 50)).columns - 20
+        for i, msg in enumerate(self.coder.cur_messages + self.coder.done_messages):
+            content = msg['content'].splitlines()[0]
+            if len(content) > columns:
+                content = content[:columns] + "..."
+            self.io.tool_output(f"#{i} {msg['role']}: {content}")
+
+    def cmd_edit_history(self, args):
+        "Edit the chat history"
+        args = args.strip()
+        if not args or not args[0] == "#" or not args[1:].isdigit():
+            self.io.tool_error("Invalid command. Please specify a message number with a # prefix.")
+            return
+        msg_number = int(args[1:])
+        if msg_number < 0 or msg_number >= len(self.coder.cur_messages + self.coder.done_messages):
+            self.io.tool_error("Invalid message number.")
+            return
+
+        editor = os.environ.get('EDITOR', 'nano')
+        msg = (self.coder.cur_messages + self.coder.done_messages)[msg_number]
+        with NamedTemporaryFile(mode='r+', suffix='.txt') as f:
+            f.write(msg['content'])
+            f.flush()
+            subprocess.run([editor, f.name])
+            f.seek(0)
+            new_content = f.read()
+            if new_content != msg['content']:
+                msg['content'] = new_content
+                self.io.tool_output("Message updated.")
+            else:
+                self.io.tool_output("Message not changed.")
 
     def cmd_git(self, args):
         "Run a git command"
@@ -494,6 +570,25 @@ class Commands:
             print()
 
         return text
+    
+    def cmd_web(self, args):
+        "Get a webpage as a read-only context"
+        url = args.strip()
+        if not url:
+            self.io.tool_error("No URL specified.")
+            return
+        
+        self.coder.extra_context[url] = scrape(url)
+        self.io.tool_output(f"Added {url} to the chat")
+
+    def cmd_print_extra_context(self, args):
+        "Show all extra context items (keys)"
+        if not self.coder.extra_context:
+            self.io.tool_output("No extra context items added to context.")
+            return
+        else:
+            for key in self.coder.extra_context.keys():
+                self.io.tool_output(key)
 
 
 def expand_subdir(file_path):

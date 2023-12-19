@@ -20,3 +20,5 @@ sounddevice
 soundfile
 PyYAML
 diff-match-patch
+selenium
+webdriver_manager

@@ -1,3 +1,5 @@
+# This is a fork of the original repository PLUS some additional features from omri123:aider:main
+
 
 # aider is AI pair programming in your terminal
 
